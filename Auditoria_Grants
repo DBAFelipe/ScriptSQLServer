@@ -49,6 +49,8 @@ BEGIN TRY
     /* ---------- PRINCIPALS → #principals (normalizando collation) ---------- */
     ;WITH principals AS
     (
+        /* dpr.type: ''S''=SQL user, ''U''=Windows user, ''G''=Windows group
+           dpr.authentication_type: 1=INSTANCE (tem login), 2=DATABASE (contained), 0=NONE */
         SELECT 
             DB_NAME()                                           AS database_name,
             (dpr.name COLLATE DATABASE_DEFAULT)                 AS principal_name,
@@ -71,28 +73,30 @@ BEGIN TRY
         CAST(N''SYNC'' AS NVARCHAR(128))  AS permission_name,
         CASE 
             WHEN authentication_type = 2 OR server_login_name IS NULL
+                /* Contained: só ajusta DEFAULT_SCHEMA se existir; comenta se não existir */
                 THEN
-                N''USE '' + QUOTENAME(DB_NAME()) + N'';'' + CHAR(13) +
-                N''IF USER_ID('' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT, '''''''') + N'') IS NULL'' + CHAR(13) +
-                N''BEGIN'' + CHAR(13) +
-                N''    -- ATENÇÃO: usuário contido '' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT) + N'' não existe; criação manual (contained) é necessária.'' + CHAR(13) +
-                N''END'' + CHAR(13) +
-                N''ELSE'' + CHAR(13) +
-                N''BEGIN'' + CHAR(13) +
-                N''    ALTER USER '' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT) + N'' WITH DEFAULT_SCHEMA = [dbo];'' + CHAR(13) +
+                N''USE '' + QUOTENAME(DB_NAME()) + N'';'' + CHAR(13)+CHAR(10) +
+                N''IF USER_ID('' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT, '''''''') + N'') IS NULL'' + CHAR(13)+CHAR(10) +
+                N''BEGIN'' + CHAR(13)+CHAR(10) +
+                N''    /* ATENÇÃO: usuário contido '' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT) + N'' não existe; criação manual (contained) é necessária. */'' + CHAR(13)+CHAR(10) +
+                N''END'' + CHAR(13)+CHAR(10) +
+                N''ELSE'' + CHAR(13)+CHAR(10) +
+                N''BEGIN'' + CHAR(13)+CHAR(10) +
+                N''    ALTER USER '' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT) + N'' WITH DEFAULT_SCHEMA = [dbo];'' + CHAR(13)+CHAR(10) +
                 N''END;''
             ELSE
-                N''USE '' + QUOTENAME(DB_NAME()) + N'';'' + CHAR(13) +
-                N''IF SUSER_ID('' + QUOTENAME(server_login_name COLLATE DATABASE_DEFAULT, '''''''') + N'') IS NULL'' + CHAR(13) +
-                N''BEGIN'' + CHAR(13) +
-                N''    -- AVISO: login '' + QUOTENAME(server_login_name COLLATE DATABASE_DEFAULT) + N'' não existe no servidor.'' + CHAR(13) +
-                N''END'' + CHAR(13) +
-                N''ELSE'' + CHAR(13) +
-                N''BEGIN'' + CHAR(13) +
-                N''    IF USER_ID('' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT, '''''''') + N'') IS NULL'' + CHAR(13) +
-                N''        CREATE USER '' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT) + N'' FOR LOGIN '' + QUOTENAME(server_login_name COLLATE DATABASE_DEFAULT) + N'' WITH DEFAULT_SCHEMA = [dbo];'' + CHAR(13) +
-                N''    ELSE'' + CHAR(13) +
-                N''        ALTER USER '' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT) + N'' WITH LOGIN = '' + QUOTENAME(server_login_name COLLATE DATABASE_DEFAULT) + N'', DEFAULT_SCHEMA = [dbo];'' + CHAR(13) +
+                /* Vinculado a login do servidor: cria/remapeia e define DEFAULT_SCHEMA */
+                N''USE '' + QUOTENAME(DB_NAME()) + N'';'' + CHAR(13)+CHAR(10) +
+                N''IF SUSER_ID('' + QUOTENAME(server_login_name COLLATE DATABASE_DEFAULT, '''''''') + N'') IS NULL'' + CHAR(13)+CHAR(10) +
+                N''BEGIN'' + CHAR(13)+CHAR(10) +
+                N''    /* AVISO: login '' + QUOTENAME(server_login_name COLLATE DATABASE_DEFAULT) + N'' não existe no servidor. */'' + CHAR(13)+CHAR(10) +
+                N''END'' + CHAR(13)+CHAR(10) +
+                N''ELSE'' + CHAR(13)+CHAR(10) +
+                N''BEGIN'' + CHAR(13)+CHAR(10) +
+                N''    IF USER_ID('' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT, '''''''') + N'') IS NULL'' + CHAR(13)+CHAR(10) +
+                N''        CREATE USER '' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT) + N'' FOR LOGIN '' + QUOTENAME(server_login_name COLLATE DATABASE_DEFAULT) + N'' WITH DEFAULT_SCHEMA = [dbo];'' + CHAR(13)+CHAR(10) +
+                N''    ELSE'' + CHAR(13)+CHAR(10) +
+                N''        ALTER USER '' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT) + N'' WITH LOGIN = '' + QUOTENAME(server_login_name COLLATE DATABASE_DEFAULT) + N'', DEFAULT_SCHEMA = [dbo];'' + CHAR(13)+CHAR(10) +
                 N''END;''
         END AS grant_stmt
     INTO #prep
@@ -106,7 +110,7 @@ BEGIN TRY
             (dpr.name COLLATE DATABASE_DEFAULT)        AS principal_name,
             dp.class_desc,
             (dp.permission_name COLLATE DATABASE_DEFAULT) AS permission_name,
-            N''USE '' + QUOTENAME(DB_NAME()) + N'';'' + CHAR(13) +
+            N''USE '' + QUOTENAME(DB_NAME()) + N'';'' + CHAR(13)+CHAR(10) +
             CASE
                 WHEN dp.class_desc = ''OBJECT_OR_COLUMN'' THEN
                     (dp.state_desc COLLATE DATABASE_DEFAULT) + N'' '' +
