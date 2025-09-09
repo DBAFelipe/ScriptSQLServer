@@ -41,8 +41,8 @@ ORDER BY
 ---------------------------------------------------------------------------------------------------------------------------------------------------
 
 /* ============================================================
-   1) Garantir a tabela de auditoria (execute uma vez)
-   ============================================================ */
+1) Garantir a tabela de auditoria (execute uma vez)
+============================================================ */
 IF DB_ID(N'BD_AUDITORIA') IS NULL
 BEGIN
     RAISERROR('Banco BD_AUDITORIA não encontrado. Crie-o antes de continuar.', 11, 1);
@@ -67,16 +67,21 @@ END
 GO
 
 /* ============================================================
-   2) Gerar e coletar scripts para TODAS as bases
-   ============================================================ */
+2) Limpar tabela de auditoria antes da execução
+============================================================ */
+TRUNCATE TABLE BD_AUDITORIA.dbo.Auditoria_Grants;
+GO
+
+/* ============================================================
+3) Gerar e coletar scripts para TODAS as bases (flat, sem comentários)
+============================================================ */
 DECLARE @db  SYSNAME;
 DECLARE @sql NVARCHAR(MAX);
 
 DECLARE dbs CURSOR LOCAL FAST_FORWARD FOR
     SELECT name
     FROM sys.databases
-    -- Para excluir bases de sistema, descomente:
-    -- WHERE name NOT IN ('master','model','msdb','tempdb')
+    -- WHERE name NOT IN ('master','model','msdb','tempdb')  -- descomente para pular bases de sistema
     ORDER BY name;
 
 OPEN dbs;
@@ -88,17 +93,15 @@ BEGIN
 BEGIN TRY
     USE ' + QUOTENAME(@db) + N';
 
-    /* ---------- PRINCIPALS → #principals (normalizando collation) ---------- */
+    /* ---------- PRINCIPALS → #principals ---------- */
     ;WITH principals AS
     (
-        /* dpr.type: ''S''=SQL user, ''U''=Windows user, ''G''=Windows group
-           dpr.authentication_type: 1=INSTANCE (tem login), 2=DATABASE (contained), 0=NONE */
         SELECT 
-            DB_NAME()                                           AS database_name,
-            (dpr.name COLLATE DATABASE_DEFAULT)                 AS principal_name,
-            dpr.type                                            AS principal_type,
-            dpr.authentication_type                             AS authentication_type,
-            (sp.name COLLATE DATABASE_DEFAULT)                  AS server_login_name  -- pode ser NULL
+            DB_NAME()                                   AS database_name,
+            (dpr.name COLLATE DATABASE_DEFAULT)         AS principal_name,
+            dpr.type                                    AS principal_type,
+            dpr.authentication_type                     AS authentication_type,
+            (sp.name COLLATE DATABASE_DEFAULT)          AS server_login_name
         FROM sys.database_principals dpr
         LEFT JOIN sys.server_principals sp
                ON dpr.sid = sp.sid
@@ -107,7 +110,7 @@ BEGIN TRY
     )
     SELECT * INTO #principals FROM principals;
 
-    /* ---------- PREP (CREATE/ALTER USER) → #prep ---------- */
+    /* ---------- PREP (CREATE/ALTER USER) → #prep (flat) ---------- */
     SELECT
         DB_NAME() AS database_name,
         principal_name,
@@ -115,43 +118,33 @@ BEGIN TRY
         CAST(N''SYNC'' AS NVARCHAR(128))  AS permission_name,
         CASE 
             WHEN authentication_type = 2 OR server_login_name IS NULL
-                /* Contained: só ajusta DEFAULT_SCHEMA se existir; comenta se não existir */
                 THEN
                 N''USE '' + QUOTENAME(DB_NAME()) + N'';'' + CHAR(13)+CHAR(10) +
-                N''IF USER_ID('' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT, '''''''') + N'') IS NULL'' + CHAR(13)+CHAR(10) +
-                N''BEGIN'' + CHAR(13)+CHAR(10) +
-                N''    /* ATENÇÃO: usuário contido '' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT) + N'' não existe; criação manual (contained) é necessária. */'' + CHAR(13)+CHAR(10) +
-                N''END'' + CHAR(13)+CHAR(10) +
-                N''ELSE'' + CHAR(13)+CHAR(10) +
+                N''IF USER_ID('' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT, '''''''') + N'') IS NOT NULL'' + CHAR(13)+CHAR(10) +
                 N''BEGIN'' + CHAR(13)+CHAR(10) +
                 N''    ALTER USER '' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT) + N'' WITH DEFAULT_SCHEMA = [dbo];'' + CHAR(13)+CHAR(10) +
-                N''END;''
+                N''END;'' + CHAR(13)+CHAR(10)
             ELSE
-                /* Vinculado a login do servidor: cria/remapeia e define DEFAULT_SCHEMA */
                 N''USE '' + QUOTENAME(DB_NAME()) + N'';'' + CHAR(13)+CHAR(10) +
-                N''IF SUSER_ID('' + QUOTENAME(server_login_name COLLATE DATABASE_DEFAULT, '''''''') + N'') IS NULL'' + CHAR(13)+CHAR(10) +
-                N''BEGIN'' + CHAR(13)+CHAR(10) +
-                N''    /* AVISO: login '' + QUOTENAME(server_login_name COLLATE DATABASE_DEFAULT) + N'' não existe no servidor. */'' + CHAR(13)+CHAR(10) +
-                N''END'' + CHAR(13)+CHAR(10) +
-                N''ELSE'' + CHAR(13)+CHAR(10) +
+                N''IF SUSER_ID('' + QUOTENAME(server_login_name COLLATE DATABASE_DEFAULT, '''''''') + N'') IS NOT NULL'' + CHAR(13)+CHAR(10) +
                 N''BEGIN'' + CHAR(13)+CHAR(10) +
                 N''    IF USER_ID('' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT, '''''''') + N'') IS NULL'' + CHAR(13)+CHAR(10) +
                 N''        CREATE USER '' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT) + N'' FOR LOGIN '' + QUOTENAME(server_login_name COLLATE DATABASE_DEFAULT) + N'' WITH DEFAULT_SCHEMA = [dbo];'' + CHAR(13)+CHAR(10) +
                 N''    ELSE'' + CHAR(13)+CHAR(10) +
                 N''        ALTER USER '' + QUOTENAME(principal_name COLLATE DATABASE_DEFAULT) + N'' WITH LOGIN = '' + QUOTENAME(server_login_name COLLATE DATABASE_DEFAULT) + N'', DEFAULT_SCHEMA = [dbo];'' + CHAR(13)+CHAR(10) +
-                N''END;''
+                N''END;'' + CHAR(13)+CHAR(10)
         END AS grant_stmt
     INTO #prep
     FROM #principals;
 
-    /* ---------- PERMS (GRANTs) → #perms (normalizando collation) ---------- */
+    /* ---------- PERMS (GRANTs) → #perms (flat) ---------- */
     ;WITH cte_perms AS
     (
         SELECT 
-            DB_NAME()                                  AS database_name,
-            (dpr.name COLLATE DATABASE_DEFAULT)        AS principal_name,
+            DB_NAME()                                      AS database_name,
+            (dpr.name COLLATE DATABASE_DEFAULT)            AS principal_name,
             dp.class_desc,
-            (dp.permission_name COLLATE DATABASE_DEFAULT) AS permission_name,
+            (dp.permission_name COLLATE DATABASE_DEFAULT)  AS permission_name,
             N''USE '' + QUOTENAME(DB_NAME()) + N'';'' + CHAR(13)+CHAR(10) +
             CASE
                 WHEN dp.class_desc = ''OBJECT_OR_COLUMN'' THEN
@@ -182,7 +175,7 @@ BEGIN TRY
                     (dp.permission_name COLLATE DATABASE_DEFAULT) +
                     N'' TO '' + QUOTENAME((dpr.name COLLATE DATABASE_DEFAULT))
                 ELSE
-                    N''ERROR: Unhandled class_desc: '' + dp.class_desc
+                    N''''
             END AS grant_stmt
         FROM sys.database_permissions AS dp 
           JOIN sys.database_principals AS dpr ON dp.grantee_principal_id = dpr.principal_id
@@ -199,19 +192,17 @@ BEGIN TRY
         (captured_at, database_name, principal_name, class_desc, permission_name, grant_stmt)
     SELECT SYSUTCDATETIME(), database_name, principal_name, class_desc, permission_name, grant_stmt
     FROM #prep
-    ORDER BY principal_name;
+    WHERE LEN(LTRIM(RTRIM(grant_stmt))) > 0;
 
     INSERT INTO BD_AUDITORIA.dbo.Auditoria_Grants
         (captured_at, database_name, principal_name, class_desc, permission_name, grant_stmt)
     SELECT SYSUTCDATETIME(), database_name, principal_name, class_desc, permission_name, grant_stmt
     FROM #perms
-    ORDER BY principal_name, class_desc, permission_name;
+    WHERE LEN(LTRIM(RTRIM(grant_stmt))) > 0;
 
 END TRY
 BEGIN CATCH
-    /* opcional: log local
-    SELECT ERROR_NUMBER() AS ErrNo, ERROR_MESSAGE() AS ErrMsg, DB_NAME() AS DbName;
-    */
+    -- log opcional
 END CATCH;
 ';
 
@@ -222,6 +213,7 @@ END
 
 CLOSE dbs;
 DEALLOCATE dbs;
+
 
 /* ============================================================
    3) Consultas úteis
