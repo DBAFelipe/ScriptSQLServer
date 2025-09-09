@@ -1,3 +1,45 @@
+Ordem lógica recomendada na execução
+
+1.SYNC
+
+Sempre executar primeiro os blocos com permission_name = 'SYNC'.
+
+Isso garante que o usuário exista e esteja mapeado corretamente ao login, ou que (no caso de contained users) tenha o DEFAULT_SCHEMA ajustado.
+
+2.CONNECT
+
+Em seguida, aplicar GRANT CONNECT TO [usuario].
+
+Isso habilita a conexão do usuário à base de dados.
+
+3.Demais permissões
+
+Depois vêm as permissões de nível DATABASE (ex.: GRANT VIEW DEFINITION, GRANT CREATE TABLE etc).
+
+Em seguida, permissões de nível SCHEMA (ex.: GRANT SELECT ON SCHEMA :: [dbo]).
+
+Por fim, permissões de nível OBJECT_OR_COLUMN (ex.: GRANT SELECT ON [dbo].[MinhaTabela] TO [usuario]), TYPE, CERTIFICATE, SYMMETRIC_KEYS etc.
+
+SELECT grant_stmt
+FROM BD_AUDITORIA.dbo.Auditoria_Grants
+ORDER BY
+    CASE 
+        WHEN permission_name = 'SYNC'     THEN 1
+        WHEN permission_name = 'CONNECT'  THEN 2
+        WHEN class_desc = 'DATABASE'      THEN 3
+        WHEN class_desc = 'SCHEMA'        THEN 4
+        WHEN class_desc = 'OBJECT_OR_COLUMN' THEN 5
+        WHEN class_desc = 'TYPE'          THEN 6
+        WHEN class_desc = 'CERTIFICATE'   THEN 7
+        WHEN class_desc = 'SYMMETRIC_KEYS' THEN 8
+        ELSE 99
+    END,
+    database_name,
+    principal_name,
+    permission_name;
+
+---------------------------------------------------------------------------------------------------------------------------------------------------
+
 /* ============================================================
    1) Garantir a tabela de auditoria (execute uma vez)
    ============================================================ */
